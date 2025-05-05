@@ -34,11 +34,7 @@ ffmpeg_options = {
 
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
-
 class YTDLSource(discord.PCMVolumeTransformer):
-    """
-    Helper class to stream audio from a YouTube URL.
-    """
     def __init__(self, source, *, data, volume=0.5):
         super().__init__(source, volume)
         self.data = data
@@ -60,11 +56,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
             data=data
         )
 
-
 async def ensure_voice(ctx):
-    """
-    Connect to the author's voice channel if not already connected.
-    """
     vc = ctx.voice_client
     if not vc or not vc.is_connected():
         if ctx.author.voice and ctx.author.voice.channel:
@@ -73,11 +65,7 @@ async def ensure_voice(ctx):
             raise RuntimeError("Voice channel required")
     return vc
 
-
 def play_next(ctx, vc):
-    """
-    Internal: play the next song in the queue if available.
-    """
     guild_id = ctx.guild.id
     queue = song_queues.get(guild_id, [])
     if queue:
@@ -91,28 +79,20 @@ def play_next(ctx, vc):
             bot.loop
         )
 
-
 @bot.command(name='play')
 async def play(ctx, *, query: str):
-    """
-    Play or queue a YouTube search or URL. Supports simple keywords.
-    """
     try:
         vc = await ensure_voice(ctx)
         song_queues.setdefault(ctx.guild.id, [])
-
         if re.match(r'https?://', query):
             search = query
         else:
             search = f"ytsearch1:{query}"
-
         info = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(search, download=False))
         if 'entries' in info:
             info = info['entries'][0]
-
         video_url = info.get('webpage_url')
         title = info.get('title')
-
         if vc.is_playing():
             song_queues[ctx.guild.id].append({'query': video_url, 'title': title})
             await ctx.send(f"✅ Added **{title}** to queue.")
@@ -124,12 +104,20 @@ async def play(ctx, *, query: str):
         print(e)
         await ctx.send("🚫 An error occurred.")
 
+@bot.command(name='stop')
+async def stop(ctx):
+    try:
+        vc = ctx.voice_client
+        if vc and vc.is_playing():
+            vc.stop()
+        song_queues[ctx.guild.id] = []
+        await ctx.send("⏹ Stopped playback and cleared queue.")
+    except Exception as e:
+        print(e)
+        await ctx.send("🚫 An error occurred.")
 
 @bot.command(name='skip')
 async def skip(ctx):
-    """
-    Skip the current song.
-    """
     try:
         vc = ctx.voice_client
         if vc and vc.is_playing():
@@ -139,12 +127,8 @@ async def skip(ctx):
         print(e)
         await ctx.send("🚫 An error occurred.")
 
-
 @bot.command(name='queue')
 async def queue(ctx):
-    """
-    List the current song queue.
-    """
     try:
         q = song_queues.get(ctx.guild.id, [])
         if not q:
@@ -156,12 +140,8 @@ async def queue(ctx):
         print(e)
         await ctx.send("🚫 An error occurred.")
 
-
 @bot.command(name='clear')
 async def clear(ctx):
-    """
-    Clear the song queue.
-    """
     try:
         song_queues[ctx.guild.id] = []
         await ctx.send("🗑️ Cleared the queue.")
@@ -169,12 +149,8 @@ async def clear(ctx):
         print(e)
         await ctx.send("🚫 An error occurred.")
 
-
 @bot.command(name='leave')
 async def leave(ctx):
-    """
-    Disconnect the bot and clear queue.
-    """
     try:
         vc = ctx.voice_client
         if vc and vc.is_connected():
@@ -184,7 +160,6 @@ async def leave(ctx):
     except Exception as e:
         print(e)
         await ctx.send("🚫 An error occurred.")
-
 
 @bot.event
 async def on_ready():
