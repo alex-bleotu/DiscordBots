@@ -6,20 +6,15 @@ from discord.ext import commands
 import yt_dlp
 import asyncio
 
-# Load environment variables from .env file
 load_dotenv()
 
-# Intents setup
 intents = discord.Intents.default()
 intents.message_content = True
 
-# Create bot instance with command prefix
 bot = commands.Bot(command_prefix='.', intents=intents)
 
-# Song queues per guild; stores dicts with 'query' and 'title'
-song_queues = {}  # {guild_id: [{'query': str, 'title': str}, ...]}
+song_queues = {}
 
-# YouTube-dl options
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'restrictfilenames': True,
@@ -32,7 +27,6 @@ ytdl_format_options = {
     'source_address': '0.0.0.0'
 }
 
-# FFmpeg options: specify executable via FFMPEG_EXEC env var or system ffmpeg
 ffmpeg_options = {
     'executable': os.getenv('FFMPEG_EXEC', 'ffmpeg'),
     'options': '-vn'
@@ -53,7 +47,6 @@ class YTDLSource(discord.PCMVolumeTransformer):
     @classmethod
     async def from_url(cls, url, *, loop=None, stream=True):
         loop = loop or asyncio.get_event_loop()
-        # Extract info, stream if requested
         data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
         if 'entries' in data:
             data = data['entries'][0]
@@ -89,12 +82,10 @@ def play_next(ctx, vc):
     queue = song_queues.get(guild_id, [])
     if queue:
         item = queue.pop(0)
-        # item['query'] is the video URL to stream
         coro = YTDLSource.from_url(item['query'], loop=bot.loop, stream=True)
         future = asyncio.run_coroutine_threadsafe(coro, bot.loop)
         source = future.result()
         vc.play(source, after=lambda e: play_next(ctx, vc))
-        # announce
         asyncio.run_coroutine_threadsafe(
             ctx.send(f"▶ Now playing: **{item['title']}**"),
             bot.loop
@@ -110,13 +101,11 @@ async def play(ctx, *, query: str):
         vc = await ensure_voice(ctx)
         song_queues.setdefault(ctx.guild.id, [])
 
-        # Determine search or direct URL
         if re.match(r'https?://', query):
             search = query
         else:
             search = f"ytsearch1:{query}"
 
-        # Retrieve metadata (no download)
         info = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(search, download=False))
         if 'entries' in info:
             info = info['entries'][0]
@@ -125,11 +114,9 @@ async def play(ctx, *, query: str):
         title = info.get('title')
 
         if vc.is_playing():
-            # queue it
             song_queues[ctx.guild.id].append({'query': video_url, 'title': title})
             await ctx.send(f"✅ Added **{title}** to queue.")
         else:
-            # play immediately
             source = await YTDLSource.from_url(video_url, loop=bot.loop, stream=True)
             vc.play(source, after=lambda e: play_next(ctx, vc))
             await ctx.send(f"▶ Now playing: **{title}**")
@@ -204,5 +191,4 @@ async def on_ready():
     print(f'Logged in as {bot.user} (ID: {bot.user.id})')
     print('------')
 
-# Bot token is now read from the DISCORD_BOT_TOKEN env var set in your .env file
 bot.run(os.getenv('DISCORD_BOT_TOKEN'))
