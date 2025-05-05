@@ -29,7 +29,8 @@ ytdl_format_options = {
 
 ffmpeg_options = {
     'executable': os.getenv('FFMPEG_EXEC', 'ffmpeg'),
-    'options': '-vn'
+    'options': '-vn',
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5'
 }
 
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
@@ -51,6 +52,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
             discord.FFmpegPCMAudio(
                 filename,
                 executable=ffmpeg_options['executable'],
+                before_options=ffmpeg_options['before_options'],
                 options=ffmpeg_options['options']
             ),
             data=data
@@ -103,6 +105,11 @@ async def play(ctx, *, query: str):
     except Exception as e:
         print(e)
         await ctx.send("🚫 An error occurred.")
+
+@play.error
+async def play_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("🚫 Usage: .play <search terms or URL>")
 
 @bot.command(name='stop')
 async def stop(ctx):
