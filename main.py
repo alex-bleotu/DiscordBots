@@ -1,19 +1,19 @@
 import os
 import re
+import asyncio
 from dotenv import load_dotenv
 import discord
 from discord.ext import commands
 import yt_dlp
-import asyncio
 
 load_dotenv()
 
 intents = discord.Intents.default()
 intents.message_content = True
-
 bot = commands.Bot(command_prefix='.', intents=intents)
 
 song_queues = {}
+idle_timers = {}
 
 ytdl_format_options = {
     'format': 'bestaudio/best',
@@ -26,13 +26,11 @@ ytdl_format_options = {
     'default_search': 'auto',
     'source_address': '0.0.0.0'
 }
-
 ffmpeg_options = {
     'executable': os.getenv('FFMPEG_EXEC', 'ffmpeg'),
     'options': '-vn',
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5'
 }
-
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
 
 class YTDLSource(discord.PCMVolumeTransformer):
@@ -58,18 +56,50 @@ class YTDLSource(discord.PCMVolumeTransformer):
             data=data
         )
 
+    @classmethod
+    def from_info(cls, info):
+        filename = info['url']
+        return cls(
+            discord.FFmpegPCMAudio(
+                filename,
+                executable=ffmpeg_options['executable'],
+                before_options=ffmpeg_options['before_options'],
+                options=ffmpeg_options['options']
+            ),
+            data=info
+        )
+
 async def ensure_voice(ctx):
     vc = ctx.voice_client
     if not vc or not vc.is_connected():
         if ctx.author.voice and ctx.author.voice.channel:
-            return await ctx.author.voice.channel.connect()
+            vc = await ctx.author.voice.channel.connect()
         else:
             raise RuntimeError("Voice channel required")
+    cancel_idle_timer(ctx.guild.id)
     return vc
+
+def cancel_idle_timer(guild_id):
+    task = idle_timers.pop(guild_id, None)
+    if task and not task.done():
+        task.cancel()
+
+def schedule_idle_disconnect(ctx):
+    guild_id = ctx.guild.id
+    cancel_idle_timer(guild_id)
+    async def disconnect_if_idle():
+        await asyncio.sleep(60)
+        vc = ctx.voice_client
+        if not vc or not vc.is_playing():
+            if vc and vc.is_connected():
+                await vc.disconnect()
+            song_queues.pop(guild_id, None)
+            await ctx.send("👋 Disconnected due to 60s of inactivity.")
+    idle_timers[guild_id] = bot.loop.create_task(disconnect_if_idle())
 
 def play_next(ctx, vc):
     guild_id = ctx.guild.id
-    queue = song_queues.get(guild_id, [])
+    queue = song_queues.get(guild_id)
     if queue:
         item = queue.pop(0)
         coro = YTDLSource.from_url(item['query'], loop=bot.loop, stream=True)
@@ -80,28 +110,30 @@ def play_next(ctx, vc):
             ctx.send(f"▶ Now playing: **{item['title']}**"),
             bot.loop
         )
+    else:
+        schedule_idle_disconnect(ctx)
 
-@bot.command(name='play')
+@bot.command()
 async def play(ctx, *, query: str):
+    """Play a song or add to queue."""
     try:
         vc = await ensure_voice(ctx)
         song_queues.setdefault(ctx.guild.id, [])
-        if re.match(r'https?://', query):
-            search = query
-        else:
-            search = f"ytsearch1:{query}"
+        search = query if re.match(r'https?://', query) else f"ytsearch1:{query}"
         info = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(search, download=False))
         if 'entries' in info:
             info = info['entries'][0]
-        video_url = info.get('webpage_url')
         title = info.get('title')
+        url = info.get('url') or info.get('webpage_url')
+
         if vc.is_playing():
-            song_queues[ctx.guild.id].append({'query': video_url, 'title': title})
+            song_queues[ctx.guild.id].append({'query': url, 'title': title})
             await ctx.send(f"✅ Added **{title}** to queue.")
         else:
-            source = await YTDLSource.from_url(video_url, loop=bot.loop, stream=True)
+            source = YTDLSource.from_info(info)
             vc.play(source, after=lambda e: play_next(ctx, vc))
             await ctx.send(f"▶ Now playing: **{title}**")
+        cancel_idle_timer(ctx.guild.id)
     except Exception as e:
         print(e)
         await ctx.send("🚫 An error occurred.")
@@ -111,31 +143,36 @@ async def play_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("🚫 Usage: .play <search terms or URL>")
 
-@bot.command(name='stop')
+@bot.command()
 async def stop(ctx):
+    """Stop playback and clear queue."""
     try:
         vc = ctx.voice_client
         if vc and vc.is_playing():
             vc.stop()
-        song_queues[ctx.guild.id] = []
+        song_queues.pop(ctx.guild.id, None)
         await ctx.send("⏹ Stopped playback and cleared queue.")
+        schedule_idle_disconnect(ctx)
     except Exception as e:
         print(e)
         await ctx.send("🚫 An error occurred.")
 
-@bot.command(name='skip')
+@bot.command()
 async def skip(ctx):
+    """Skip current track."""
     try:
         vc = ctx.voice_client
         if vc and vc.is_playing():
             vc.stop()
         await ctx.send("⏭ Skipped track.")
+        schedule_idle_disconnect(ctx)
     except Exception as e:
         print(e)
         await ctx.send("🚫 An error occurred.")
 
-@bot.command(name='queue')
+@bot.command()
 async def queue(ctx):
+    """Show song queue."""
     try:
         q = song_queues.get(ctx.guild.id, [])
         if not q:
@@ -147,22 +184,26 @@ async def queue(ctx):
         print(e)
         await ctx.send("🚫 An error occurred.")
 
-@bot.command(name='clear')
+@bot.command()
 async def clear(ctx):
+    """Clear song queue."""
     try:
-        song_queues[ctx.guild.id] = []
+        song_queues.pop(ctx.guild.id, None)
         await ctx.send("🗑️ Cleared the queue.")
+        schedule_idle_disconnect(ctx)
     except Exception as e:
         print(e)
         await ctx.send("🚫 An error occurred.")
 
-@bot.command(name='leave')
+@bot.command()
 async def leave(ctx):
+    """Disconnect bot and clear queue."""
     try:
         vc = ctx.voice_client
         if vc and vc.is_connected():
             await vc.disconnect()
-        song_queues[ctx.guild.id] = []
+        song_queues.pop(ctx.guild.id, None)
+        cancel_idle_timer(ctx.guild.id)
         await ctx.send("👋 Left voice channel and cleared queue.")
     except Exception as e:
         print(e)
