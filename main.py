@@ -88,13 +88,13 @@ def schedule_idle_disconnect(ctx):
     guild_id = ctx.guild.id
     cancel_idle_timer(guild_id)
     async def disconnect_if_idle():
-        await asyncio.sleep(60)
+        await asyncio.sleep(300)
         vc = ctx.voice_client
         if not vc or not vc.is_playing():
             if vc and vc.is_connected():
                 await vc.disconnect()
             song_queues.pop(guild_id, None)
-            await ctx.send("👋 Disconnected due to 60s of inactivity.")
+            await ctx.send("👋 Disconnected due to inactivity.")
     idle_timers[guild_id] = bot.loop.create_task(disconnect_if_idle())
 
 def play_next(ctx, vc):
